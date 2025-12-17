@@ -1,6 +1,10 @@
 import React, { useState, useEffect, useMemo } from 'react';
 import { Book, Calendar, Star, Trash2, PenTool, BarChart3, Download, Filter, Plus, X, Search, Loader2, Quote, MinusCircle, Edit } from 'lucide-react';
 
+// --- Firebase Imports ---
+import { db } from './firebase'; // 방금 만든 firebase.js 파일 import
+import { collection, getDocs, addDoc, updateDoc, deleteDoc, doc, query, orderBy } from 'firebase/firestore';
+
 // --- Components ---
 
 const Card = ({ children, className = "" }) => (
@@ -46,7 +50,7 @@ const Badge = ({ children, color = "blue" }) => {
 // --- Main Application ---
 
 export default function ReadingTracker() {
-  // Initial State Helper
+  // Initial Book Object Template
   const initialBookState = {
     title: '',
     author: '',
@@ -58,15 +62,13 @@ export default function ReadingTracker() {
   };
 
   // State
-  const [books, setBooks] = useState(() => {
-    const saved = localStorage.getItem('reading-insight-data');
-    return saved ? JSON.parse(saved) : [];
-  });
+  const [books, setBooks] = useState([]); // 초기값 빈 배열 (DB에서 불러올 것임)
+  const [loading, setLoading] = useState(true); // 로딩 상태 추가
   
   const [isFormOpen, setIsFormOpen] = useState(false);
-  const [editingId, setEditingId] = useState(null); // 수정 중인 책의 ID (null이면 새 글 작성)
+  const [editingId, setEditingId] = useState(null); 
   const [filterCategory, setFilterCategory] = useState('All');
-  const [sortBy, setSortBy] = useState('date'); // 'date' | 'rating'
+  const [sortBy, setSortBy] = useState('date');
 
   // Search API State
   const [searchTerm, setSearchTerm] = useState('');
@@ -78,7 +80,7 @@ export default function ReadingTracker() {
   const [newBook, setNewBook] = useState(initialBookState);
   const [scrapInput, setScrapInput] = useState('');
 
-  // Categories based on user interests
+  // Categories
   const categories = [
     { id: '인문학', label: '인문학', color: 'indigo' },
     { id: '철학/불교', label: '철학/불교', color: 'amber' },
@@ -89,10 +91,32 @@ export default function ReadingTracker() {
     { id: '기타', label: '기타', color: 'slate' },
   ];
 
-  // Save to LocalStorage
+  // --- Firebase Logic: Fetch Data ---
+  // 앱 실행 시 Firestore에서 데이터 가져오기
   useEffect(() => {
-    localStorage.setItem('reading-insight-data', JSON.stringify(books));
-  }, [books]);
+    const fetchBooks = async () => {
+      setLoading(true);
+      try {
+        // 'books' 컬렉션에서 데이터 가져오기 (날짜 내림차순 정렬)
+        const q = query(collection(db, "books"), orderBy("date", "desc"));
+        const querySnapshot = await getDocs(q);
+        
+        const loadedBooks = querySnapshot.docs.map(doc => ({
+          id: doc.id, // Firestore가 생성한 고유 ID
+          ...doc.data()
+        }));
+        
+        setBooks(loadedBooks);
+      } catch (error) {
+        console.error("Error fetching books: ", error);
+        alert("데이터를 불러오는 중 오류가 발생했습니다.");
+      } finally {
+        setLoading(false);
+      }
+    };
+
+    fetchBooks();
+  }, []);
 
   // Helper: Reset Form
   const resetForm = () => {
@@ -104,17 +128,15 @@ export default function ReadingTracker() {
     setIsFormOpen(false);
   };
 
-  // Helper: Close Modal
   const handleCloseModal = () => {
     if (window.confirm('작성 중인 내용이 사라질 수 있습니다. 닫으시겠습니까?')) {
       resetForm();
     }
   };
 
-  // Google Books API Search Function
+  // Google Books API Search (Existing Logic)
   const searchBooks = async () => {
     if (!searchTerm.trim()) return;
-    
     setIsSearching(true);
     setSearchError(null);
     setSearchResults([]);
@@ -123,12 +145,8 @@ export default function ReadingTracker() {
       const response = await fetch(`https://www.googleapis.com/books/v1/volumes?q=${encodeURIComponent(searchTerm)}&maxResults=5`);
       if (!response.ok) throw new Error('검색 실패');
       const data = await response.json();
-      
-      if (data.items) {
-        setSearchResults(data.items);
-      } else {
-        setSearchResults([]); // No results
-      }
+      if (data.items) setSearchResults(data.items);
+      else setSearchResults([]);
     } catch (err) {
       setSearchError('책 정보를 불러오지 못했습니다. 직접 입력해주세요.');
     } finally {
@@ -136,16 +154,14 @@ export default function ReadingTracker() {
     }
   };
 
-  // Select Book from Search Results
   const handleSelectBook = (bookItem) => {
     const info = bookItem.volumeInfo;
     const authors = info.authors ? info.authors.join(', ') : '';
     
-    // Auto-categorization Logic (Simplified for brevity, same logic as before)
+    // Auto-categorization (Existing Logic)
     let detectedCategory = '기타';
     const apiCategories = info.categories || [];
     const title = info.title || '';
-    
     const keywords = {
       '철학/불교': ['Philosophy', 'Religion', 'Buddhism', 'Meditation', '철학', '종교', '불교', '명상', 'Zen', 'Mindfulness'],
       '우주/과학': ['Science', 'Physics', 'Astronomy', 'Space', 'Technology', 'Math', 'Computer', 'Biology', '과학', '우주', '물리', '천문', '기술', '수학', '생물'],
@@ -154,70 +170,75 @@ export default function ReadingTracker() {
       '에세이/소설': ['Fiction', 'Literature', 'Essay', 'Novel', 'Poetry', 'Drama', '소설', '에세이', '문학', '시', '수필', '산문'],
       '인문학': ['Humanities', 'History', 'Social', 'Psychology', 'Art', 'Culture', '인문', '역사', '사회', '심리', '예술', '교양', '문화']
     };
-
     const textToCheck = (title + ' ' + apiCategories.join(' ')).toLowerCase();
-
-    let found = false;
     for (const [catId, keyArr] of Object.entries(keywords)) {
       if (keyArr.some(k => textToCheck.includes(k.toLowerCase()))) {
         detectedCategory = catId;
-        found = true;
         break;
       }
     }
 
-    setNewBook(prev => ({
-      ...prev,
-      title: info.title,
-      author: authors,
-      category: detectedCategory
-    }));
-    
+    setNewBook(prev => ({ ...prev, title: info.title, author: authors, category: detectedCategory }));
     setSearchResults([]); 
     setSearchTerm(''); 
   };
 
-  // Handler: Add Scrap
   const handleAddScrap = () => {
     if (!scrapInput.trim()) return;
-    setNewBook(prev => ({
-      ...prev,
-      scraps: [...prev.scraps, scrapInput.trim()]
-    }));
+    setNewBook(prev => ({ ...prev, scraps: [...prev.scraps, scrapInput.trim()] }));
     setScrapInput('');
   };
 
   const handleRemoveScrap = (index) => {
-    setNewBook(prev => ({
-      ...prev,
-      scraps: prev.scraps.filter((_, i) => i !== index)
-    }));
+    setNewBook(prev => ({ ...prev, scraps: prev.scraps.filter((_, i) => i !== index) }));
   };
 
-  // Handler: Save Book (Create or Update)
-  const handleSaveBook = (e) => {
+  // --- Firebase Logic: Save (Create/Update) ---
+  const handleSaveBook = async (e) => {
     e.preventDefault();
     if (!newBook.title.trim()) return;
 
-    if (editingId) {
-      // --- UPDATE Logic ---
-      setBooks(books.map(book => 
-        book.id === editingId ? { ...book, ...newBook } : book
-      ));
-    } else {
-      // --- CREATE Logic ---
-      const bookEntry = {
-        id: Date.now(),
-        ...newBook,
-        createdAt: new Date().toISOString()
-      };
-      setBooks([bookEntry, ...books]);
+    try {
+      if (editingId) {
+        // [UPDATE] Firestore 문서 업데이트
+        const bookRef = doc(db, "books", editingId);
+        await updateDoc(bookRef, newBook);
+        
+        // UI 상태 업데이트 (다시 fetch하지 않고 로컬 상태 반영하여 속도 향상)
+        setBooks(books.map(book => 
+          book.id === editingId ? { ...book, ...newBook } : book
+        ));
+      } else {
+        // [CREATE] Firestore에 새 문서 추가
+        const bookData = {
+          ...newBook,
+          createdAt: new Date().toISOString()
+        };
+        const docRef = await addDoc(collection(db, "books"), bookData);
+        
+        // UI 상태 업데이트
+        setBooks([{ ...bookData, id: docRef.id }, ...books]);
+      }
+      resetForm();
+    } catch (error) {
+      console.error("Error saving book: ", error);
+      alert("저장 중 오류가 발생했습니다.");
     }
-
-    resetForm();
   };
 
-  // Handler: Edit Book Button Click
+  // --- Firebase Logic: Delete ---
+  const handleDeleteBook = async (id) => {
+    if (window.confirm('정말 이 기록을 삭제하시겠습니까?')) {
+      try {
+        await deleteDoc(doc(db, "books", id));
+        setBooks(books.filter(book => book.id !== id));
+      } catch (error) {
+        console.error("Error deleting book: ", error);
+        alert("삭제 중 오류가 발생했습니다.");
+      }
+    }
+  };
+
   const handleEditClick = (book) => {
     setEditingId(book.id);
     setNewBook({
@@ -232,14 +253,7 @@ export default function ReadingTracker() {
     setIsFormOpen(true);
   };
 
-  // Handler: Delete Book
-  const handleDeleteBook = (id) => {
-    if (window.confirm('정말 이 기록을 삭제하시겠습니까?')) {
-      setBooks(books.filter(book => book.id !== id));
-    }
-  };
-
-  // Handler: Export CSV
+  // Export CSV (Existing Logic)
   const handleExportCSV = () => {
     const headers = ['제목,저자,카테고리,읽은날짜,평점,감상평,스크랩'];
     const rows = books.map(book => {
@@ -256,26 +270,20 @@ export default function ReadingTracker() {
     document.body.removeChild(link);
   };
 
-  // Derived State (Statistics)
+  // Stats Logic (Existing)
   const stats = useMemo(() => {
     const total = books.length;
     const avgRating = total > 0 ? (books.reduce((acc, cur) => acc + Number(cur.rating), 0) / total).toFixed(1) : 0;
-    
-    // Monthly stats
     const currentMonth = new Date().toISOString().slice(0, 7);
     const thisMonthCount = books.filter(b => b.date.startsWith(currentMonth)).length;
-
-    // Favorite Category
     const catCount = books.reduce((acc, cur) => {
       acc[cur.category] = (acc[cur.category] || 0) + 1;
       return acc;
     }, {});
     const favCat = Object.keys(catCount).reduce((a, b) => catCount[a] > catCount[b] ? a : b, '-');
-
     return { total, avgRating, thisMonthCount, favCat };
   }, [books]);
 
-  // Filter & Sort
   const filteredBooks = books
     .filter(book => filterCategory === 'All' || book.category === filterCategory)
     .sort((a, b) => {
@@ -283,6 +291,17 @@ export default function ReadingTracker() {
       if (sortBy === 'rating') return b.rating - a.rating;
       return 0;
     });
+
+  if (loading) {
+    return (
+      <div className="min-h-screen flex items-center justify-center bg-gray-50">
+        <div className="text-center">
+          <Loader2 size={40} className="animate-spin text-indigo-600 mx-auto mb-4" />
+          <p className="text-gray-500 font-medium">독서 기록을 불러오는 중...</p>
+        </div>
+      </div>
+    );
+  }
 
   return (
     <div className="min-h-screen bg-gray-50 text-gray-800 font-sans pb-12">
@@ -488,7 +507,7 @@ export default function ReadingTracker() {
             
             <div className="p-6 space-y-5">
               
-              {/* Search Section - Only show when NOT editing for better UX, or always show if you want users to replace info */}
+              {/* Search Section */}
               {!editingId && (
                 <div className="bg-indigo-50 p-4 rounded-xl border border-indigo-100">
                   <label className="block text-sm font-semibold text-indigo-900 mb-2">책 검색으로 자동 입력</label>
@@ -535,7 +554,6 @@ export default function ReadingTracker() {
                 </div>
               )}
 
-              {/* Separator only when adding new */}
               {!editingId && (
                 <div className="relative flex py-1 items-center">
                     <div className="flex-grow border-t border-gray-200"></div>
