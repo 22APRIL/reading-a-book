@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useMemo } from 'react';
-import { Book, Calendar, Star, Trash2, PenTool, BarChart3, Download, Filter, Plus, X, Search, Loader2, Quote, MinusCircle } from 'lucide-react';
+import { Book, Calendar, Star, Trash2, PenTool, BarChart3, Download, Filter, Plus, X, Search, Loader2, Quote, MinusCircle, Edit } from 'lucide-react';
 
 // --- Components ---
 
@@ -9,7 +9,7 @@ const Card = ({ children, className = "" }) => (
   </div>
 );
 
-const Button = ({ children, onClick, variant = "primary", className = "", icon: Icon, disabled = false, type = "button" }) => {
+const Button = ({ children, onClick, variant = "primary", className = "", icon: Icon, disabled = false, type = "button", title = "" }) => {
   const baseStyle = "flex items-center justify-center px-4 py-2 rounded-lg font-medium transition-all duration-200 active:scale-95 disabled:opacity-50 disabled:cursor-not-allowed";
   const variants = {
     primary: "bg-indigo-600 text-white hover:bg-indigo-700 shadow-md shadow-indigo-200",
@@ -19,7 +19,7 @@ const Button = ({ children, onClick, variant = "primary", className = "", icon: 
   };
 
   return (
-    <button type={type} onClick={onClick} disabled={disabled} className={`${baseStyle} ${variants[variant]} ${className}`}>
+    <button type={type} onClick={onClick} disabled={disabled} title={title} className={`${baseStyle} ${variants[variant]} ${className}`}>
       {Icon && <Icon size={18} className="mr-2" />}
       {children}
     </button>
@@ -46,6 +46,17 @@ const Badge = ({ children, color = "blue" }) => {
 // --- Main Application ---
 
 export default function ReadingTracker() {
+  // Initial State Helper
+  const initialBookState = {
+    title: '',
+    author: '',
+    date: new Date().toISOString().split('T')[0],
+    rating: 5,
+    category: '인문학',
+    review: '',
+    scraps: []
+  };
+
   // State
   const [books, setBooks] = useState(() => {
     const saved = localStorage.getItem('reading-insight-data');
@@ -53,6 +64,7 @@ export default function ReadingTracker() {
   });
   
   const [isFormOpen, setIsFormOpen] = useState(false);
+  const [editingId, setEditingId] = useState(null); // 수정 중인 책의 ID (null이면 새 글 작성)
   const [filterCategory, setFilterCategory] = useState('All');
   const [sortBy, setSortBy] = useState('date'); // 'date' | 'rating'
 
@@ -63,17 +75,8 @@ export default function ReadingTracker() {
   const [searchError, setSearchError] = useState(null);
 
   // Form State
-  const [newBook, setNewBook] = useState({
-    title: '',
-    author: '',
-    date: new Date().toISOString().split('T')[0],
-    rating: 5,
-    category: '인문학',
-    review: '',
-    scraps: [] // Array of strings
-  });
-  
-  const [scrapInput, setScrapInput] = useState(''); // Temp input for a scrap
+  const [newBook, setNewBook] = useState(initialBookState);
+  const [scrapInput, setScrapInput] = useState('');
 
   // Categories based on user interests
   const categories = [
@@ -90,6 +93,23 @@ export default function ReadingTracker() {
   useEffect(() => {
     localStorage.setItem('reading-insight-data', JSON.stringify(books));
   }, [books]);
+
+  // Helper: Reset Form
+  const resetForm = () => {
+    setNewBook(initialBookState);
+    setEditingId(null);
+    setScrapInput('');
+    setSearchResults([]);
+    setSearchTerm('');
+    setIsFormOpen(false);
+  };
+
+  // Helper: Close Modal
+  const handleCloseModal = () => {
+    if (window.confirm('작성 중인 내용이 사라질 수 있습니다. 닫으시겠습니까?')) {
+      resetForm();
+    }
+  };
 
   // Google Books API Search Function
   const searchBooks = async () => {
@@ -121,8 +141,8 @@ export default function ReadingTracker() {
     const info = bookItem.volumeInfo;
     const authors = info.authors ? info.authors.join(', ') : '';
     
-    // Auto-categorization Logic
-    let detectedCategory = '기타'; // Default fallback
+    // Auto-categorization Logic (Simplified for brevity, same logic as before)
+    let detectedCategory = '기타';
     const apiCategories = info.categories || [];
     const title = info.title || '';
     
@@ -174,31 +194,42 @@ export default function ReadingTracker() {
     }));
   };
 
-  // Handler: Add Book
-  const handleAddBook = (e) => {
+  // Handler: Save Book (Create or Update)
+  const handleSaveBook = (e) => {
     e.preventDefault();
     if (!newBook.title.trim()) return;
 
-    const bookEntry = {
-      id: Date.now(),
-      ...newBook,
-      createdAt: new Date().toISOString()
-    };
+    if (editingId) {
+      // --- UPDATE Logic ---
+      setBooks(books.map(book => 
+        book.id === editingId ? { ...book, ...newBook } : book
+      ));
+    } else {
+      // --- CREATE Logic ---
+      const bookEntry = {
+        id: Date.now(),
+        ...newBook,
+        createdAt: new Date().toISOString()
+      };
+      setBooks([bookEntry, ...books]);
+    }
 
-    setBooks([bookEntry, ...books]);
+    resetForm();
+  };
+
+  // Handler: Edit Book Button Click
+  const handleEditClick = (book) => {
+    setEditingId(book.id);
     setNewBook({
-      title: '',
-      author: '',
-      date: new Date().toISOString().split('T')[0],
-      rating: 5,
-      category: '인문학',
-      review: '',
-      scraps: []
+      title: book.title,
+      author: book.author,
+      date: book.date,
+      rating: book.rating,
+      category: book.category,
+      review: book.review,
+      scraps: book.scraps || []
     });
-    setScrapInput('');
-    setIsFormOpen(false);
-    setSearchResults([]);
-    setSearchTerm('');
+    setIsFormOpen(true);
   };
 
   // Handler: Delete Book
@@ -268,7 +299,7 @@ export default function ReadingTracker() {
              <Button variant="ghost" onClick={handleExportCSV} className="hidden sm:flex text-sm">
                 <Download size={16} className="mr-1"/> 데이터 내보내기
              </Button>
-            <Button onClick={() => setIsFormOpen(true)} icon={Plus}>
+            <Button onClick={() => { resetForm(); setIsFormOpen(true); }} icon={Plus}>
               기록하기
             </Button>
           </div>
@@ -407,22 +438,31 @@ export default function ReadingTracker() {
 
                       {/* Right: Actions & Rating (Desktop) */}
                       <div className="flex sm:flex-col justify-between items-end gap-2 border-t sm:border-t-0 sm:border-l border-gray-100 pt-3 sm:pt-0 sm:pl-4 sm:min-w-[100px]">
-                         <div className="hidden sm:flex flex-col items-end">
+                          <div className="hidden sm:flex flex-col items-end">
                             <div className="flex items-center gap-1 text-yellow-500 mb-1">
                               {[...Array(5)].map((_, i) => (
                                 <Star key={i} size={14} className={i < book.rating ? "fill-yellow-500" : "text-gray-200 fill-gray-200"} />
                               ))}
                             </div>
                             <span className="text-xs font-medium text-gray-400">{book.rating} / 5.0</span>
-                         </div>
+                          </div>
 
-                         <button 
-                            onClick={() => handleDeleteBook(book.id)}
-                            className="text-gray-400 hover:text-red-500 hover:bg-red-50 p-2 rounded-lg transition-colors ml-auto sm:ml-0"
-                            title="삭제하기"
-                         >
-                           <Trash2 size={16} />
-                         </button>
+                          <div className="flex items-center gap-2 ml-auto sm:ml-0">
+                            <button 
+                              onClick={() => handleEditClick(book)}
+                              className="text-gray-400 hover:text-indigo-600 hover:bg-indigo-50 p-2 rounded-lg transition-colors"
+                              title="수정하기"
+                            >
+                              <Edit size={16} />
+                            </button>
+                            <button 
+                              onClick={() => handleDeleteBook(book.id)}
+                              className="text-gray-400 hover:text-red-500 hover:bg-red-50 p-2 rounded-lg transition-colors"
+                              title="삭제하기"
+                            >
+                              <Trash2 size={16} />
+                            </button>
+                          </div>
                       </div>
                     </div>
                   </Card>
@@ -438,66 +478,73 @@ export default function ReadingTracker() {
         <div className="fixed inset-0 bg-black/40 backdrop-blur-sm z-50 flex items-center justify-center p-4">
           <div className="bg-white rounded-2xl w-full max-w-lg shadow-2xl max-h-[90vh] overflow-y-auto">
             <div className="p-6 border-b border-gray-100 flex justify-between items-center sticky top-0 bg-white z-10">
-              <h2 className="text-xl font-bold text-gray-900">새로운 책 기록</h2>
-              <button onClick={() => setIsFormOpen(false)} className="text-gray-400 hover:text-gray-600 p-1 rounded-full hover:bg-gray-100">
+              <h2 className="text-xl font-bold text-gray-900">
+                {editingId ? '독서 기록 수정' : '새로운 책 기록'}
+              </h2>
+              <button onClick={handleCloseModal} className="text-gray-400 hover:text-gray-600 p-1 rounded-full hover:bg-gray-100">
                 <X size={24} />
               </button>
             </div>
             
             <div className="p-6 space-y-5">
               
-              {/* Search Section */}
-              <div className="bg-indigo-50 p-4 rounded-xl border border-indigo-100">
-                <label className="block text-sm font-semibold text-indigo-900 mb-2">책 검색으로 자동 입력</label>
-                <div className="flex gap-2">
-                  <input 
-                    type="text" 
-                    className="flex-1 px-3 py-2 border border-indigo-200 rounded-lg focus:ring-2 focus:ring-indigo-500 outline-none text-sm"
-                    placeholder="책 제목을 검색해보세요 (예: 코스모스)"
-                    value={searchTerm}
-                    onChange={(e) => setSearchTerm(e.target.value)}
-                    onKeyDown={(e) => e.key === 'Enter' && searchBooks()}
-                  />
-                  <Button onClick={searchBooks} disabled={isSearching} className="whitespace-nowrap px-3 py-2 text-sm">
-                    {isSearching ? <Loader2 size={16} className="animate-spin" /> : <Search size={16} />}
-                  </Button>
-                </div>
-                
-                {searchError && <p className="text-xs text-red-500 mt-2">{searchError}</p>}
-                
-                {/* Search Results */}
-                {searchResults.length > 0 && (
-                  <div className="mt-3 bg-white rounded-lg border border-gray-200 overflow-hidden max-h-40 overflow-y-auto shadow-inner">
-                    {searchResults.map((item) => (
-                      <div 
-                        key={item.id} 
-                        onClick={() => handleSelectBook(item)}
-                        className="p-2 hover:bg-indigo-50 cursor-pointer border-b border-gray-100 last:border-0 flex items-center gap-3 transition-colors"
-                      >
-                         <div className="w-8 h-10 bg-gray-200 rounded flex-shrink-0 overflow-hidden">
+              {/* Search Section - Only show when NOT editing for better UX, or always show if you want users to replace info */}
+              {!editingId && (
+                <div className="bg-indigo-50 p-4 rounded-xl border border-indigo-100">
+                  <label className="block text-sm font-semibold text-indigo-900 mb-2">책 검색으로 자동 입력</label>
+                  <div className="flex gap-2">
+                    <input 
+                      type="text" 
+                      className="flex-1 px-3 py-2 border border-indigo-200 rounded-lg focus:ring-2 focus:ring-indigo-500 outline-none text-sm"
+                      placeholder="책 제목을 검색해보세요 (예: 코스모스)"
+                      value={searchTerm}
+                      onChange={(e) => setSearchTerm(e.target.value)}
+                      onKeyDown={(e) => e.key === 'Enter' && searchBooks()}
+                    />
+                    <Button onClick={searchBooks} disabled={isSearching} className="whitespace-nowrap px-3 py-2 text-sm">
+                      {isSearching ? <Loader2 size={16} className="animate-spin" /> : <Search size={16} />}
+                    </Button>
+                  </div>
+                  
+                  {searchError && <p className="text-xs text-red-500 mt-2">{searchError}</p>}
+                  
+                  {/* Search Results */}
+                  {searchResults.length > 0 && (
+                    <div className="mt-3 bg-white rounded-lg border border-gray-200 overflow-hidden max-h-40 overflow-y-auto shadow-inner">
+                      {searchResults.map((item) => (
+                        <div 
+                          key={item.id} 
+                          onClick={() => handleSelectBook(item)}
+                          className="p-2 hover:bg-indigo-50 cursor-pointer border-b border-gray-100 last:border-0 flex items-center gap-3 transition-colors"
+                        >
+                          <div className="w-8 h-10 bg-gray-200 rounded flex-shrink-0 overflow-hidden">
                             {item.volumeInfo.imageLinks?.smallThumbnail ? (
                               <img src={item.volumeInfo.imageLinks.smallThumbnail} alt="" className="w-full h-full object-cover" />
                             ) : (
                               <div className="w-full h-full flex items-center justify-center text-gray-400"><Book size={12}/></div>
                             )}
-                         </div>
-                         <div className="min-w-0">
-                           <p className="text-sm font-bold text-gray-800 truncate">{item.volumeInfo.title}</p>
-                           <p className="text-xs text-gray-500 truncate">{item.volumeInfo.authors?.join(', ')}</p>
-                         </div>
-                      </div>
-                    ))}
-                  </div>
-                )}
-              </div>
+                          </div>
+                          <div className="min-w-0">
+                            <p className="text-sm font-bold text-gray-800 truncate">{item.volumeInfo.title}</p>
+                            <p className="text-xs text-gray-500 truncate">{item.volumeInfo.authors?.join(', ')}</p>
+                          </div>
+                        </div>
+                      ))}
+                    </div>
+                  )}
+                </div>
+              )}
 
-              <div className="relative flex py-1 items-center">
-                  <div className="flex-grow border-t border-gray-200"></div>
-                  <span className="flex-shrink-0 mx-4 text-gray-400 text-xs">또는 직접 입력</span>
-                  <div className="flex-grow border-t border-gray-200"></div>
-              </div>
+              {/* Separator only when adding new */}
+              {!editingId && (
+                <div className="relative flex py-1 items-center">
+                    <div className="flex-grow border-t border-gray-200"></div>
+                    <span className="flex-shrink-0 mx-4 text-gray-400 text-xs">또는 직접 입력</span>
+                    <div className="flex-grow border-t border-gray-200"></div>
+                </div>
+              )}
 
-              <form onSubmit={handleAddBook} className="space-y-5">
+              <form onSubmit={handleSaveBook} className="space-y-5">
                 <div>
                   <label className="block text-sm font-medium text-gray-700 mb-1">책 제목</label>
                   <input 
@@ -615,8 +662,8 @@ export default function ReadingTracker() {
                 </div>
 
                 <div className="pt-2">
-                  <Button className="w-full py-3 text-lg" onClick={handleAddBook}>
-                    기록 저장하기
+                  <Button className="w-full py-3 text-lg" onClick={handleSaveBook}>
+                    {editingId ? '수정 완료' : '기록 저장하기'}
                   </Button>
                 </div>
               </form>
